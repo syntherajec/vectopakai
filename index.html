@@ -897,16 +897,15 @@ function vectorize(canvas) {
 
 // ── SVG → EPS ──
 function svgToEps(svgStr, title, width, height) {
-  var parser=new DOMParser();
-  var doc=parser.parseFromString(svgStr,'image/svg+xml');
-  var el=doc.documentElement;
-  var vb=(el.getAttribute('viewBox')||'0 0 '+width+' '+height).split(' ').map(Number);
-  var vbW=vb[2]||width, vbH=vb[3]||height;
-  var tW=Math.max(width,1000), tH=Math.max(height,1000);
-  var sX=tW/vbW, sY=tH/vbH;
-  var ps=doc.querySelectorAll('path');
-  var date=new Date().toISOString().slice(0,10);
-  var eps='%!PS-Adobe-3.0 EPSF-3.0\\n'
+  // Pure regex SVG parser — works in Web Worker (no DOM APIs needed)
+  var vbMatch = svgStr.match(/viewBox=["']([^"']+)["']/);
+  var vbParts = vbMatch ? vbMatch[1].split(/\\s+|,/).map(Number) : [0,0,width,height];
+  var vbW = vbParts[2]||width, vbH = vbParts[3]||height;
+  var tW = Math.max(width,1000), tH = Math.max(height,1000);
+  var sX = tW/vbW, sY = tH/vbH;
+  var date = new Date().toISOString().slice(0,10);
+
+  var eps = '%!PS-Adobe-3.0 EPSF-3.0\\n'
     +'%%BoundingBox: 0 0 '+Math.round(tW)+' '+Math.round(tH)+'\\n'
     +'%%HiResBoundingBox: 0.0 0.0 '+tW.toFixed(4)+' '+tH.toFixed(4)+'\\n'
     +'%%Title: ('+title.replace(/[()]/g,'')+')\\n'
@@ -917,16 +916,29 @@ function svgToEps(svgStr, title, width, height) {
     +'%%LanguageLevel: 3\\n%%Pages: 1\\n%%EndComments\\n'
     +'%%BeginSetup\\n%%EndSetup\\n%%Page: 1 1\\ngsave\\n'
     +'1 -1 scale\\n0 -'+tH+' translate\\n';
-  ps.forEach(function(p){
-    var fill=p.getAttribute('fill')||'#000000';
-    var d=p.getAttribute('d')||'';
-    if(!d||fill==='none') return;
-    var rgb=hexRgb(fill); if(!rgb) return;
-    eps+=rgb.r.toFixed(4)+' '+rgb.g.toFixed(4)+' '+rgb.b.toFixed(4)+' setrgbcolor\\n';
-    var psd=pathToPs(d,sX,sY,vbH);
-    if(psd) eps+='newpath\\n'+psd+'\\nfill\\n';
-  });
-  eps+='grestore\\n%%Trailer\\n%%EOF\\n';
+
+  // Extract all <path .../> elements using regex (no DOM)
+  var pathRe = /<path([^>]+)(?:\/>|>)/g;
+  var attrMatch, pathMatch;
+  while ((pathMatch = pathRe.exec(svgStr)) !== null) {
+    var attrs = pathMatch[1];
+    // Extract fill
+    var fillM = attrs.match(/fill=["']([^"']+)["']/);
+    var fill = fillM ? fillM[1] : '#000000';
+    if (fill === 'none') continue;
+    // Extract d
+    var dM = attrs.match(/\\sd=["']([^"']+)["']/);
+    if (!dM) dM = attrs.match(/^d=["']([^"']+)["']/);
+    if (!dM) dM = attrs.match(/d=["']([^"']*?)["']/);
+    var d = dM ? dM[1] : '';
+    if (!d) continue;
+    var rgb = hexRgb(fill); if (!rgb) continue;
+    eps += rgb.r.toFixed(4)+' '+rgb.g.toFixed(4)+' '+rgb.b.toFixed(4)+' setrgbcolor\\n';
+    var psd = pathToPs(d, sX, sY, vbH);
+    if (psd) eps += 'newpath\\n'+psd+'\\nfill\\n';
+  }
+
+  eps += 'grestore\\n%%Trailer\\n%%EOF\\n';
   return eps;
 }
 
